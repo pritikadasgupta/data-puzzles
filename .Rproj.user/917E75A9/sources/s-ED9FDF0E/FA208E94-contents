@@ -1,0 +1,1539 @@
+---
+title: "Subject 7 - Session 2"
+author: "Pritika Dasgupta"
+date: "4/22/2017"
+output: html_document
+---
+
+## Setup - Trial 1
+
+
+```{r}
+setwd("~/Documents/Sejdic Lab/pritika_gait-selected/Gait_Analysis/Tests/Subject_7_D/2nd_session/1st_trial")
+library(openxlsx)
+pressure <- read.xlsx("Gait_analysis_pressure_report.xlsx", sheet = 1, startRow = 4, colNames = TRUE)
+back <- read.csv("MOS2A06140526 (2014-07-21)RAW.csv",skip=10,header=FALSE)
+names(back)[names(back)=="V1"] <- "y"
+names(back)[names(back)=="V2"] <- "x"
+names(back)[names(back)=="V3"] <- "z"
+back$time <-seq(from = 0.0125, to = 600, by = 0.0125)
+```
+
+## Signal Processing - Toe-off events - Trial 1
+
+Remove any artifact related to the gravity by removing the mean from the acquired signals.
+
+
+```{r}
+back$y1 <- back$y - mean(back$y)
+back$x1 <- back$x - mean(back$x)
+back$z1 <- back$z - mean(back$z) 
+```
+
+Remove impulse-like artifacts unrelated to gait via median filtering:
+
+```{r}
+library(FBN)
+back$y2 <-medianFilter(back$y1,1)
+back$x2 <-medianFilter(back$x1,1)
+back$z2 <-medianFilter(back$z1,1)
+```
+
+Normalize the filtered signals to unify amplitudes.
+
+```{r}
+back$y3 <- back$y2/max(abs(back$y2))
+back$x3 <- back$x2/max(abs(back$x2))
+back$z3 <- back$z2/max(abs(back$z2))
+```
+
+Determine the # of local maxima present in y3(n) under the constraint that successive local maxima have to be at least 0.35 seconds apart and K ≤ N, where 0.35 seconds represents a conservative estimate of half of the stance phase during a single stride.
+
+```{r}
+findpeaks <- function(vec,bw=1,x.coo=c(1:length(vec)))
+{
+  pos.x.max <- NULL
+  pos.y.max <- NULL
+  pos.x.min <- NULL
+  pos.y.min <- NULL 	
+  for(i in 1:(length(vec)-1)) 	{ 		if((i+1+bw)>length(vec)){
+    sup.stop <- length(vec)}else{sup.stop <- i+1+bw
+    }
+    if((i-bw)<1){inf.stop <- 1}else{inf.stop <- i-bw}
+    subset.sup <- vec[(i+1):sup.stop]
+    subset.inf <- vec[inf.stop:(i-1)]
+    
+    is.max   <- sum(subset.inf > vec[i]) == 0
+    is.nomin <- sum(subset.sup > vec[i]) == 0
+    
+    no.max   <- sum(subset.inf > vec[i]) == length(subset.inf)
+    no.nomin <- sum(subset.sup > vec[i]) == length(subset.sup)
+    
+    if(is.max & is.nomin){
+      pos.x.max <- c(pos.x.max,x.coo[i])
+      pos.y.max <- c(pos.y.max,vec[i])
+    }
+    if(no.max & no.nomin){
+      pos.x.min <- c(pos.x.min,x.coo[i])
+      pos.y.min <- c(pos.y.min,vec[i])
+    }
+  }
+  return(list(pos.x.max,pos.y.max,pos.x.min,pos.y.min))
+}
+```
+
+
+```{r}
+index_localmax <- findpeaks(back$y3)[[1]]
+diff_localmax <-c(10,diff(index_localmax))
+value_localmax <- back$y3[index_localmax]
+time_localmax <-index_localmax*0.0125
+localmax <-data.frame(index_localmax,diff_localmax,value_localmax,time_localmax)
+
+index_test <-findpeaks(localmax$value_localmax)[[1]]
+index_localmax_test <- localmax$index_localmax[index_test]
+diff_test <-c(10,diff(index_test))
+value_test <- back$y3[index_localmax_test]
+time_test <-index_localmax_test*0.0125
+localmax1 <-data.frame(index_test,index_localmax_test,diff_test,value_test,time_test)
+
+
+#subset the alpha-val into those that are greater than 0.3  
+localmax1 <-localmax1[(localmax1$value_test>0.3),]
+rownames(localmax1) <- NULL
+
+
+par(mfrow=c(1,1)) 
+plot(back$time[400:800],back$y3[400:800],type="l",xlab="Time (sec)",ylab="Acceleration (m/s)",main="y")
+points(localmax1$index_localmax_test*0.0125,localmax1$value_test,col="red")
+
+```
+
+Determine the time indices n from y3(n) of k local maxima values.
+
+```{r}
+localmax2 <-localmax1
+localmax2$beta_val2 <- localmax1$index_localmax_test
+localmax2$alpha_val2 <- back$y3[localmax2$beta_val]
+localmax2 <- localmax2[,c("beta_val2","alpha_val2")]
+```
+
+Find points after 0.25 sec after local maxima (paper says 0.15 bc it is the double support duration, but there's a lot of noise).
+
+```{r}
+q_val <-list()
+q_alpha <-list()
+t_val_index <-vector()
+for (i in 1:length(localmax2$beta_val2)){
+  q_val[[i]]<-seq(from = localmax2$beta_val2[i], to = localmax2$beta_val2[i]+10, by = 1)
+  q_alpha[[i]] <- back$y3[q_val[[i]]]
+  min_index <- which.min(q_alpha[[i]])
+  t_val_index[i] <-min_index-1
+}
+
+
+localmax3 <-localmax2
+localmax3$t_val_index <-t_val_index
+
+```
+
+Update index values.
+
+```{r}
+localmax3$beta_val3 <-localmax3$beta_val2+localmax3$t_val_index
+localmax3$alpha_val3 <-back$y3[localmax3$beta_val3]
+localmax3 <-localmax3[c("beta_val3","alpha_val3")]
+localmax3 <- unique(localmax3)
+localmax3$diff3 <-c(60,diff(localmax3$beta_val3))
+
+i=2
+while(i<nrow(localmax3)){
+  if (localmax3$diff3[i] <=28){
+    if (localmax3$alpha_val3[i] < localmax3$alpha_val3[i-1]){
+      localmax3 <- localmax3[-c(i-1), ]
+      rownames(localmax3) <- NULL
+      localmax3$diff3 <-c(60,diff(localmax3$beta_val3))
+      
+    }else if(localmax3$alpha_val3[i-1] < localmax3$alpha_val3[i]){
+      localmax3 <- localmax3[-c(i), ]
+      rownames(localmax3) <- NULL
+      localmax3$diff3 <-c(60,diff(localmax3$beta_val3))
+      
+    }else if(localmax3$alpha_val3[i-1] == localmax3$alpha_val3[i]){
+      localmax3 <- localmax3[-c(i), ]
+      rownames(localmax3) <- NULL
+      localmax3$diff3 <-c(60,diff(localmax3$beta_val3))
+    }
+    i=2
+  }else if(localmax3$diff3[i] >28){
+    i=i+1
+  }
+}
+
+plot(back$time[1:500],back$y3[1:500],type="l",xlab="Time (sec)",ylab="Acceleration (m/s)",main="y (Vertical) Direction - Toe-off events")
+points(localmax3$beta_val3*0.0125, localmax3$alpha_val3,col="red")
+```
+
+Calculate new mean of x3 (of 10 seconds).
+
+```{r}
+x_mean_hat <- mean(back$x3[0:80])
+x_mean_hat
+```
+
+Since x_mean_hat is less than 0, then we can figure out the sequences of the time indices of the right and left toe-offs.
+
+```{r}
+localmax4 <-localmax3[c("beta_val3","alpha_val3")]
+localmax4 <- unique(localmax4)
+rownames(localmax4) <- NULL
+right_toeoff <- localmax4[ !c(TRUE,FALSE), ] #even
+rownames(right_toeoff) <- NULL
+left_toeoff <- localmax4[ c(TRUE,FALSE), ] #odd
+rownames(right_toeoff) <- NULL
+
+right_toeoff$time <- right_toeoff$beta_val3*0.0125
+left_toeoff$time <- left_toeoff$beta_val3*0.0125
+
+
+# plot(back$time[1400:1800], back$y3[1400:1800], type = "l")
+# points(right_toeoff$time, right_toeoff$alpha_val3,col="red",pch="R",cex=1.5)
+# points(left_toeoff$time, left_toeoff$alpha_val3,col="blue",pch="L",cex=1.5)
+```
+
+Since x_mean_hat is less than 0, then we can figure out the sequences of the time indices of the right and left toe-offs.
+
+## Signal Processing - Heel strike events - Trial 1
+
+Make an initial estimate from the index values from the toe-offs. Investigate the AP direction.
+
+```{r}
+par(mfrow=c(1,1)) 
+plot(back$time[400:800],back$z3[400:800],type="l",xlab="Time (sec)",ylab="Acceleration (m/s)",main="AP")
+points(localmax3$beta_val3*0.0125,back$z3[localmax3$beta_val3],col="red")
+```
+
+determine the first order derivative of z3(n) = w(n)
+
+```{r}
+library(pspline)
+back$w <- abs(predict(sm.spline(back$time, back$z3), back$time, 1))
+
+plot(back$time[400:800],back$w[400:800],type="l",xlab="Time (sec)",ylab="Acceleration (m/s)",main="dAP")
+points(localmax3$beta_val3*0.0125,back$w[localmax3$beta_val3],col="red")
+```
+
+find local maxima of w(n)
+
+```{r}
+index_localmax_w <- findpeaks(back$w)[[1]]
+diff_localmax_w <-c(10,diff(index_localmax_w))
+value_localmax_w <- back$w[index_localmax_w]
+time_localmax_w <-index_localmax_w*0.0125
+localmax_w <-data.frame(index_localmax_w,diff_localmax_w,value_localmax_w,time_localmax_w)
+
+
+index_test_w <-findpeaks(localmax_w$value_localmax_w)[[1]]
+index_localmax_test_w <- localmax_w$index_localmax_w[index_test_w]
+diff_test_w <-c(10,diff(index_test_w))
+value_test_w <- back$w[index_localmax_test_w]
+time_test_w <-index_localmax_test_w*0.0125
+test_w <-data.frame(index_test_w,index_localmax_test_w,diff_test_w,value_test_w,time_test_w)
+
+
+plot(back$time[400:800],back$w[400:800],type="l",xlab="Time (sec)",ylab="Acceleration (m/s)",main="dAP")
+points(test_w$index_localmax_test_w*0.0125,back$w[test_w$index_localmax_test_w],col="red")
+
+
+plot(back$time[400:800],back$z3[400:800],type="l",xlab="Time (sec)",ylab="Acceleration (m/s)",main="AP")
+points(test_w$index_localmax_test_w*0.0125,back$z3[test_w$index_localmax_test_w],col="red")
+
+```
+
+find z3 points after 50*0.0125 sec before betaval2 of z3
+
+```{r}
+q_val <-list()
+q_alpha <-list()
+t_val_index <-vector()
+for (i in 1:length(test_w$index_localmax_test_w)){
+  q_val[[i]]<-seq(from = max(test_w$index_localmax_test_w[i]-50,1), to = (test_w$index_localmax_test_w[i]), by = 1)
+  q_alpha[[i]] <- back$z3[q_val[[i]]]
+  min_index <- which.min(q_alpha[[i]])
+
+  if(i==1){
+    t_val_index[i] <-1
+  }else{
+    t_val_index[i] <-length(q_alpha[[i]])-min_index
+  }
+}
+
+test_w <-data.frame(index_test_w,index_localmax_test_w,diff_test_w,value_test_w,time_test_w)
+test_w$beta_val3 <-test_w$index_localmax_test_w
+test_w$alpha_val3 <-test_w$value_test_w
+
+localmax_w2 <- test_w[c("beta_val3","alpha_val3")]
+localmax_w2$t_val_index <-t_val_index
+localmax_w2$new_index <-localmax_w2$beta_val3 - localmax_w2$t_val_index
+localmax_w2$new_index[1] <-localmax_w2$new_index[1] + 1
+localmax_w2$new_value <-back$z3[localmax_w2$new_index]
+
+
+plot(back$time[400:800],back$z3[400:800],type="l",xlab="Time (sec)",ylab="Acceleration (m/s)",main="AP")
+points(localmax_w2$new_index*0.0125,back$z3[localmax_w2$new_index],col="red")
+
+#AAAAAAAAHHHHHHH
+
+```
+
+```{r}
+localmax_w2 <- unique(localmax_w2)
+localmax_w2$diff3 <-c(60,diff(localmax_w2$new_index))
+
+i=2
+while(i<nrow(localmax_w2)){
+  if (localmax_w2$diff3[i] <=28){
+    if (localmax_w2$new_index[i] < localmax_w2$new_index[i-1]){
+      localmax_w2 <- localmax_w2[-c(i-1), ]
+      rownames(localmax_w2) <- NULL
+      localmax_w2$diff3 <-c(60,diff(localmax_w2$beta_val3))
+      
+    }else if(localmax_w2$new_index[i-1] < localmax_w2$new_index[i]){
+      localmax_w2 <- localmax_w2[-c(i), ]
+      rownames(localmax_w2) <- NULL
+      localmax_w2$diff3 <-c(60,diff(localmax_w2$beta_val3))
+      
+    }else if(localmax_w2$new_index[i-1] == localmax_w2$new_index[i]){
+      localmax_w2 <- localmax_w2[-c(i), ]
+      rownames(localmax_w2) <- NULL
+      localmax_w2$diff3 <-c(60,diff(localmax_w2$beta_val3))
+    }
+    i=2
+  }else if(localmax_w2$diff3[i] >28){
+    i=i+1
+  }
+}
+
+plot(back$time[400:800],back$z3[400:800],type="l",xlab="Time (sec)",ylab="Acceleration (m/s)",main="AP")
+points(localmax_w2$new_index*0.0125,back$z3[localmax_w2$new_index],col="red")
+
+```
+
+
+alternate heel strikes for left and right
+
+```{r}
+localmax4_w <-localmax_w2[c("new_index","new_value")]
+localmax4_w <- unique(localmax4_w)
+rownames(localmax4_w) <- NULL
+right_heelstrike <- localmax4_w[ !c(TRUE,FALSE), ] #even
+rownames(right_heelstrike) <- NULL
+left_heelstrike <- localmax4_w[ c(TRUE,FALSE), ] #odd
+rownames(right_heelstrike) <- NULL
+
+right_heelstrike$time <- right_heelstrike$new_index*0.0125
+left_heelstrike$time <- left_heelstrike$new_index*0.0125
+
+right_stride_times <- right_heelstrike[c(-2)]
+right_stride_times$stride_time_interval <-c(diff(right_stride_times$time),0)
+
+left_stride_times <- left_heelstrike[c(-2)]
+left_stride_times$stride_time_interval <-c(diff(left_stride_times$time),0)
+```
+
+##Visualizations for Toe-offs and Heel Strikes - Trial 1
+
+```{r}
+par(mfrow=c(1,1)) 
+x_mean_left <- left_heelstrike
+x_mean_left$x_mean <-mean(back$x3[0:8])
+par(mfrow=c(1,1)) 
+plot(back$time[0:8], back$x3[0:8], type = "l",xlab="Time (sec)",ylab="Acceleration (m/s)",main="x (Medial-Lateral) Direction - First 0.10 seconds")
+abline(h=x_mean_left$x_mean, col="purple")
+legend("bottomright", legend=c("x direction", "Average of x over 0.10 seconds"),col=c("black", "purple"), lty=1:1, cex=0.8,box.lty=0)
+
+par(mfrow=c(1,1)) 
+plot(pressure$`Time,s`[6751:7250],pressure$`LT.Force,N`[6751:7250],col="blue",type="l",xlab="Time (sec)",ylab="Force (N)",main="Pressure")
+lines(pressure$`Time,s`[6751:7250],pressure$`RT.Force,N`[6751:7250],col="red")
+legend("bottomright", legend=c("Left", "Right"),col=c("blue", "red"), lty=1:1, cex=0.8,box.lty=0)
+# par(mfrow=c(1,1)) 
+plot(back$time[5400:5800],back$y3[5400:5800],type="l",xlab="Time (sec)",ylab="Acceleration (m/s)",main="y (Vertical) Direction - Toe-off events")
+points(right_toeoff$time, right_toeoff$alpha_val3,col="red",pch="R",cex=1.5)
+points(left_toeoff$time, left_toeoff$alpha_val3,col="blue",pch="L",cex=1.5)
+
+plot(back$time[5400:5800], back$z3[5400:5800], type = "l",xlab="Time (sec)",ylab="Acceleration (m/s)",main="z (Anterior-Posterior) Direction - Heel-strike events")
+points(right_heelstrike$time, right_heelstrike$new_value,col="red",pch="R",cex=1.5)
+points(left_heelstrike$time, left_heelstrike$new_value,col="blue",pch="L",cex=1.5)
+```
+
+##Save Trial 1 files
+
+```{r}
+setwd("~/Documents/Sejdic Lab/Gait_PD_2017/Tests-measures/Subject_7_D/2nd_session/1st_trial")
+write.xlsx(right_stride_times,"right_stride_times_back.xlsx")
+write.xlsx(left_stride_times,"left_stride_times_back.xlsx")
+write.xlsx(right_toeoff,"right_toeoff.xlsx")
+write.xlsx(left_toeoff,"left_toeoff.xlsx")
+write.xlsx(pressure,"pressure.xlsx")
+write.xlsx(back,"back.xlsx")
+```
+
+##Extract Strides
+
+```{r}
+setwd("~/Documents/Sejdic Lab/Gait_PD_2017/Tests-measures/Subject_7_D/2nd_session/1st_trial")
+library(openxlsx)
+pressure <-read.xlsx("pressure.xlsx", sheet = 1, startRow = 1, colNames = TRUE)
+back <- read.xlsx("back.xlsx", sheet = 1, startRow = 1, colNames = TRUE)
+right_toeoff <- read.xlsx("right_toeoff.xlsx", sheet = 1, startRow = 1, colNames = TRUE)
+left_toeoff <- read.xlsx("left_toeoff.xlsx", sheet = 1, startRow = 1, colNames = TRUE)
+right_heelstrike <- read.xlsx("right_stride_times_back.xlsx", sheet = 1, startRow = 1, colNames = TRUE)
+left_heelstrike <- read.xlsx("left_stride_times_back.xlsx", sheet = 1, startRow = 1, colNames = TRUE)
+
+setwd("~/Documents/Sejdic Lab/Gait_PD_2017/Tests/Subject_7_D/2nd_session/1st_trial")
+
+chest <- read.csv("MOS2A47130498.csv",skip=10,header=FALSE)
+Lwrist <- read.csv("MOS2A06140534.csv",skip=10,header=FALSE)
+Rwrist <- read.csv("MOS2A06140546.csv",skip=10,header=FALSE)
+Lankle <- read.csv("MOS2A06140541.csv",skip=10,header=FALSE)
+Rankle <- read.csv("MOS2A06140519.csv",skip=10,header=FALSE)
+
+names(chest)[names(chest)=="V1"] <- "y"
+names(chest)[names(chest)=="V2"] <- "x"
+names(chest)[names(chest)=="V3"] <- "z"
+
+names(Lwrist)[names(Lwrist)=="V1"] <- "y"
+names(Lwrist)[names(Lwrist)=="V2"] <- "x"
+names(Lwrist)[names(Lwrist)=="V3"] <- "z"
+
+names(Rwrist)[names(Rwrist)=="V1"] <- "y"
+names(Rwrist)[names(Rwrist)=="V2"] <- "x"
+names(Rwrist)[names(Rwrist)=="V3"] <- "z"
+
+names(Lankle)[names(Lankle)=="V1"] <- "y"
+names(Lankle)[names(Lankle)=="V2"] <- "x"
+names(Lankle)[names(Lankle)=="V3"] <- "z"
+
+names(Rankle)[names(Rankle)=="V1"] <- "y"
+names(Rankle)[names(Rankle)=="V2"] <- "x"
+names(Rankle)[names(Rankle)=="V3"] <- "z"
+
+chest$time <-seq(from = 0.0125, to = 600, by = 0.0125)
+Lankle$time <-seq(from = 0.0125, to = 600, by = 0.0125)
+Lwrist$time <-seq(from = 0.0125, to = 600, by = 0.0125)
+Rankle$time <-seq(from = 0.0125, to = 600, by = 0.0125)
+Rwrist$time <-seq(from = 0.0125, to = 600, by = 0.0125)
+
+#RIGHT STRIDES
+
+right_stride_num <- vector()
+right_stride_back_x <- list()
+right_stride_back_y <- list()
+right_stride_back_z <- list()
+
+right_stride_chest_x <- list()
+right_stride_chest_y <- list()
+right_stride_chest_z <- list()
+
+right_stride_Lankle_x <- list()
+right_stride_Lankle_y <- list()
+right_stride_Lankle_z <- list()
+
+right_stride_Rankle_x <- list()
+right_stride_Rankle_y <- list()
+right_stride_Rankle_z <- list()
+
+right_stride_Lwrist_x <- list()
+right_stride_Lwrist_y <- list()
+right_stride_Lwrist_z <- list()
+
+right_stride_Rwrist_x <- list()
+right_stride_Rwrist_y <- list()
+right_stride_Rwrist_z <- list()
+
+right_stride_index <- list()
+
+k=1
+for (i in 1:nrow(right_heelstrike)){
+  if (i!=nrow(right_heelstrike)){
+    right_stride_num[k] <- k
+    stride_index <- seq(right_heelstrike$new_index[i], right_heelstrike$new_index[i+1], by = 1)
+    right_stride_index[[k]] <- stride_index
+    right_stride_back_x[[k]] <- back$x[stride_index] 
+    right_stride_back_y[[k]] <- back$y[stride_index]
+    right_stride_back_z[[k]] <- back$z[stride_index]
+    
+    right_stride_chest_x[[k]] <- chest$x[stride_index] 
+    right_stride_chest_y[[k]] <- chest$y[stride_index]
+    right_stride_chest_z[[k]] <- chest$z[stride_index]
+    
+    right_stride_Lankle_x[[k]] <- Lankle$x[stride_index] 
+    right_stride_Lankle_y[[k]] <- Lankle$y[stride_index]
+    right_stride_Lankle_z[[k]] <- Lankle$z[stride_index]
+    
+    right_stride_Rankle_x[[k]] <- Rankle$x[stride_index] 
+    right_stride_Rankle_y[[k]] <- Rankle$y[stride_index]
+    right_stride_Rankle_z[[k]] <- Rankle$z[stride_index]
+    
+    right_stride_Lwrist_x[[k]] <- Lwrist$x[stride_index] 
+    right_stride_Lwrist_y[[k]] <- Lwrist$y[stride_index]
+    right_stride_Lwrist_z[[k]] <- Lwrist$z[stride_index]
+    
+    right_stride_Rwrist_x[[k]] <- Rwrist$x[stride_index] 
+    right_stride_Rwrist_y[[k]] <- Rwrist$y[stride_index]
+    right_stride_Rwrist_z[[k]] <- Rwrist$z[stride_index]
+    
+    k=k+1
+  }
+}
+
+right_stride_df <- data.frame(right_stride_num)
+
+right_stride_df$right_stride_index <- right_stride_index
+
+right_stride_df$right_stride_back_x <-right_stride_back_x
+right_stride_df$right_stride_back_y <-right_stride_back_y
+right_stride_df$right_stride_back_z <-right_stride_back_z
+
+right_stride_df$right_stride_chest_x <-right_stride_chest_x
+right_stride_df$right_stride_chest_y <-right_stride_chest_y
+right_stride_df$right_stride_chest_z <-right_stride_chest_z
+
+right_stride_df$right_stride_Lankle_x <-right_stride_Lankle_x
+right_stride_df$right_stride_Lankle_y <-right_stride_Lankle_y
+right_stride_df$right_stride_Lankle_z <-right_stride_Lankle_z
+
+right_stride_df$right_stride_Rankle_x <-right_stride_Rankle_x
+right_stride_df$right_stride_Rankle_y <-right_stride_Rankle_y
+right_stride_df$right_stride_Rankle_z <-right_stride_Rankle_z
+
+right_stride_df$right_stride_Lwrist_x <-right_stride_Lwrist_x
+right_stride_df$right_stride_Lwrist_y <-right_stride_Lwrist_y
+right_stride_df$right_stride_Lwrist_z <-right_stride_Lwrist_z
+
+right_stride_df$right_stride_Rwrist_x <-right_stride_Rwrist_x
+right_stride_df$right_stride_Rwrist_y <-right_stride_Rwrist_y
+right_stride_df$right_stride_Rwrist_z <-right_stride_Rwrist_z
+
+
+#LEFT STRIDES
+
+left_stride_num <- vector()
+left_stride_back_x <- list()
+left_stride_back_y <- list()
+left_stride_back_z <- list()
+
+left_stride_chest_x <- list()
+left_stride_chest_y <- list()
+left_stride_chest_z <- list()
+
+left_stride_Lankle_x <- list()
+left_stride_Lankle_y <- list()
+left_stride_Lankle_z <- list()
+
+left_stride_Rankle_x <- list()
+left_stride_Rankle_y <- list()
+left_stride_Rankle_z <- list()
+
+left_stride_Lwrist_x <- list()
+left_stride_Lwrist_y <- list()
+left_stride_Lwrist_z <- list()
+
+left_stride_Rwrist_x <- list()
+left_stride_Rwrist_y <- list()
+left_stride_Rwrist_z <- list()
+
+left_stride_index <- list()
+
+k=1
+for (i in 1:nrow(left_heelstrike)){
+  if (i!=nrow(left_heelstrike)){
+    left_stride_num[k] <- k
+    stride_index <- seq(left_heelstrike$new_index[i], left_heelstrike$new_index[i+1], by = 1)
+    left_stride_index[[k]] <- stride_index
+    left_stride_back_x[[k]] <- back$x[stride_index] 
+    left_stride_back_y[[k]] <- back$y[stride_index]
+    left_stride_back_z[[k]] <- back$z[stride_index]
+    
+    left_stride_chest_x[[k]] <- chest$x[stride_index] 
+    left_stride_chest_y[[k]] <- chest$y[stride_index]
+    left_stride_chest_z[[k]] <- chest$z[stride_index]
+    
+    left_stride_Lankle_x[[k]] <- Lankle$x[stride_index] 
+    left_stride_Lankle_y[[k]] <- Lankle$y[stride_index]
+    left_stride_Lankle_z[[k]] <- Lankle$z[stride_index]
+    
+    left_stride_Rankle_x[[k]] <- Rankle$x[stride_index] 
+    left_stride_Rankle_y[[k]] <- Rankle$y[stride_index]
+    left_stride_Rankle_z[[k]] <- Rankle$z[stride_index]
+    
+    left_stride_Lwrist_x[[k]] <- Lwrist$x[stride_index] 
+    left_stride_Lwrist_y[[k]] <- Lwrist$y[stride_index]
+    left_stride_Lwrist_z[[k]] <- Lwrist$z[stride_index]
+    
+    left_stride_Rwrist_x[[k]] <- Rwrist$x[stride_index] 
+    left_stride_Rwrist_y[[k]] <- Rwrist$y[stride_index]
+    left_stride_Rwrist_z[[k]] <- Rwrist$z[stride_index]
+    
+    k=k+1
+  }
+}
+
+left_stride_df <- data.frame(left_stride_num)
+
+left_stride_df$left_stride_index <- left_stride_index
+
+left_stride_df$left_stride_back_x <-left_stride_back_x
+left_stride_df$left_stride_back_y <-left_stride_back_y
+left_stride_df$left_stride_back_z <-left_stride_back_z
+
+left_stride_df$left_stride_chest_x <-left_stride_chest_x
+left_stride_df$left_stride_chest_y <-left_stride_chest_y
+left_stride_df$left_stride_chest_z <-left_stride_chest_z
+
+left_stride_df$left_stride_Lankle_x <-left_stride_Lankle_x
+left_stride_df$left_stride_Lankle_y <-left_stride_Lankle_y
+left_stride_df$left_stride_Lankle_z <-left_stride_Lankle_z
+
+left_stride_df$left_stride_Rankle_x <-left_stride_Rankle_x
+left_stride_df$left_stride_Rankle_y <-left_stride_Rankle_y
+left_stride_df$left_stride_Rankle_z <-left_stride_Rankle_z
+
+left_stride_df$left_stride_Lwrist_x <-left_stride_Lwrist_x
+left_stride_df$left_stride_Lwrist_y <-left_stride_Lwrist_y
+left_stride_df$left_stride_Lwrist_z <-left_stride_Lwrist_z
+
+left_stride_df$left_stride_Rwrist_x <-left_stride_Rwrist_x
+left_stride_df$left_stride_Rwrist_y <-left_stride_Rwrist_y
+left_stride_df$left_stride_Rwrist_z <-left_stride_Rwrist_z
+
+setwd("~/Documents/Sejdic Lab/Gait_PD_2017/Tests-measures/Subject_7_D/2nd_session/1st_trial")
+saveRDS(left_stride_df,"left_stride_df.rds")
+saveRDS(right_stride_df,"right_stride_df.rds")
+
+write.xlsx(chest,"chest.xlsx")
+write.xlsx(Lankle,"Lankle.xlsx")
+write.xlsx(Rankle,"Rankle.xlsx")
+write.xlsx(Lwrist,"Lwrist.xlsx")
+write.xlsx(Rwrist,"Rwrist.xlsx")
+```
+
+## Setup - Trial 2
+
+```{r}
+setwd("~/Documents/Sejdic Lab/pritika_gait-selected/Gait_Analysis/Tests/Subject_7_D/2nd_session/2nd_trial")
+library(openxlsx)
+pressure <- read.xlsx("Gait_analysis_pressure_report.xlsx", sheet = 1, startRow = 4, colNames = TRUE)
+back <- read.csv("MOS2A06140526 (2014-07-21)RAW.csv",skip=10,header=FALSE)
+names(back)[names(back)=="V1"] <- "y"
+names(back)[names(back)=="V2"] <- "x"
+names(back)[names(back)=="V3"] <- "z"
+back$time <-seq(from = 0.0125, to = 600, by = 0.0125)
+```
+
+## Signal Processing - Toe-Off events - Trial 2
+
+Remove any artifact related to the gravity by removing the mean from the acquired signals.
+
+
+```{r}
+back$y1 <- back$y - mean(back$y)
+back$x1 <- back$x - mean(back$x)
+back$z1 <- back$z - mean(back$z) 
+```
+
+Remove impulse-like artifacts unrelated to gait via median filtering:
+
+```{r}
+library(FBN)
+back$y2 <-medianFilter(back$y1,1)
+back$x2 <-medianFilter(back$x1,1)
+back$z2 <-medianFilter(back$z1,1)
+```
+
+Normalize the filtered signals to unify amplitudes.
+
+```{r}
+back$y3 <- back$y2/max(abs(back$y2))
+back$x3 <- back$x2/max(abs(back$x2))
+back$z3 <- back$z2/max(abs(back$z2))
+```
+
+Determine the # of local maxima present in y3(n) under the constraint that successive local maxima have to be at least 0.35 seconds apart and K ≤ N, where 0.35 seconds represents a conservative estimate of half of the stance phase during a single stride.
+
+```{r}
+index_localmax <- findpeaks(back$y3)[[1]]
+diff_localmax <-c(10,diff(index_localmax))
+value_localmax <- back$y3[index_localmax]
+time_localmax <-index_localmax*0.0125
+localmax <-data.frame(index_localmax,diff_localmax,value_localmax,time_localmax)
+
+index_test <-findpeaks(localmax$value_localmax)[[1]]
+index_localmax_test <- localmax$index_localmax[index_test]
+diff_test <-c(10,diff(index_test))
+value_test <- back$y3[index_localmax_test]
+time_test <-index_localmax_test*0.0125
+localmax1 <-data.frame(index_test,index_localmax_test,diff_test,value_test,time_test)
+
+#subset the alpha-val into those that are greater than 0.3  (paper says 0)
+localmax1 <-localmax1[(localmax1$value_test>0.3),]
+rownames(localmax1) <- NULL
+```
+
+Determine the time indices n from y3(n) of k local maxima values.
+
+```{r}
+localmax2 <-localmax1
+localmax2$beta_val2 <- localmax1$index_localmax_test
+localmax2$alpha_val2 <- back$y3[localmax2$beta_val]
+localmax2 <- localmax2[,c("beta_val2","alpha_val2")]
+
+```
+
+Find points after 0.25 sec after local maxima (paper says 0.15 bc it is the double support duration, but there's a lot of noise).
+
+```{r}
+q_val <-list()
+q_alpha <-list()
+t_val_index <-vector()
+for (i in 1:length(localmax2$beta_val2)){
+  q_val[[i]]<-seq(from = localmax2$beta_val2[i], to = localmax2$beta_val2[i]+25, by = 1)
+  q_alpha[[i]] <- back$y3[q_val[[i]]]
+  min_index <- which.min(q_alpha[[i]])
+  t_val_index[i] <-min_index-1
+}
+
+
+localmax3 <-localmax2
+localmax3$t_val_index <-t_val_index
+```
+
+Update index values.
+
+```{r}
+localmax3$beta_val3 <-localmax3$beta_val2+localmax3$t_val_index
+localmax3$alpha_val3 <-back$y3[localmax3$beta_val3]
+localmax3 <-localmax3[c("beta_val3","alpha_val3")]
+localmax3 <- unique(localmax3)
+localmax3$diff3 <-c(60,diff(localmax3$beta_val3))
+
+i=2
+while(i<nrow(localmax3)){
+  if (localmax3$diff3[i] <=28){
+    print(i)
+    if (localmax3$alpha_val3[i] < localmax3$alpha_val3[i-1]){
+      localmax3 <- localmax3[-c(i-1), ]
+      rownames(localmax3) <- NULL
+      localmax3$diff3 <-c(60,diff(localmax3$beta_val3))
+      
+    }else if(localmax3$alpha_val3[i-1] < localmax3$alpha_val3[i]){
+      localmax3 <- localmax3[-c(i), ]
+      rownames(localmax3) <- NULL
+      localmax3$diff3 <-c(60,diff(localmax3$beta_val3))
+      
+    }else if(localmax3$alpha_val3[i-1] == localmax3$alpha_val3[i]){
+      localmax3 <- localmax3[-c(i), ]
+      rownames(localmax3) <- NULL
+      localmax3$diff3 <-c(60,diff(localmax3$beta_val3))
+    }
+    i=2
+  }else if(localmax3$diff3[i] >28){
+    i=i+1
+  }
+}
+
+plot(back$time[400:800],back$y3[400:800],type="l",xlab="Time (sec)",ylab="Acceleration (m/s)",main="y (Vertical) Direction - Toe-off events")
+points(localmax3$beta_val3*0.0125, localmax3$alpha_val3,col="red")
+```
+
+Calculate new mean of x3 (of 10 seconds).
+
+```{r}
+x_mean_hat <- mean(back$x3[0:80])
+x_mean_hat
+```
+
+Since x_mean_hat is less than 0, then we can figure out the sequences of the time indices of the right and left toe-offs.
+
+```{r}
+localmax4 <-localmax3[c("beta_val3","alpha_val3")]
+localmax4 <- unique(localmax4)
+rownames(localmax4) <- NULL
+right_toeoff <- localmax4[ !c(TRUE,FALSE), ] #even
+rownames(right_toeoff) <- NULL
+left_toeoff <- localmax4[ c(TRUE,FALSE), ] #odd
+rownames(right_toeoff) <- NULL
+
+right_toeoff$time <- right_toeoff$beta_val3*0.0125
+left_toeoff$time <- left_toeoff$beta_val3*0.0125
+```
+
+## Signal Processing - Heel strike events - Trial 2
+
+Make an initial estimate from the index values from the toe-offs. Investigate the AP direction.
+
+```{r}
+par(mfrow=c(1,1)) 
+plot(back$time[400:800],back$z3[400:800],type="l",xlab="Time (sec)",ylab="Acceleration (m/s)",main="AP")
+points(localmax3$beta_val2*0.0125,back$z3[localmax3$beta_val2],col="red")
+```
+
+determine the first order derivative of z3(n) = w(n)
+
+```{r}
+library(pspline)
+back$w <- abs(predict(sm.spline(back$time, back$z3), back$time, 1))
+```
+
+find local maxima of w(n)
+
+```{r}
+index_localmax_w <- findpeaks(back$w)[[1]]
+diff_localmax_w <-c(10,diff(index_localmax_w))
+value_localmax_w <- back$w[index_localmax_w]
+time_localmax_w <-index_localmax_w*0.0125
+localmax_w <-data.frame(index_localmax_w,diff_localmax_w,value_localmax_w,time_localmax_w)
+
+
+index_test_w <-findpeaks(localmax_w$value_localmax_w)[[1]]
+index_localmax_test_w <- localmax_w$index_localmax_w[index_test_w]
+diff_test_w <-c(10,diff(index_test_w))
+value_test_w <- back$w[index_localmax_test_w]
+time_test_w <-index_localmax_test_w*0.0125
+test_w <-data.frame(index_test_w,index_localmax_test_w,diff_test_w,value_test_w,time_test_w)
+```
+
+find z3 points after 50*0.0125 sec before betaval2 of z3
+
+```{r}
+q_val <-list()
+q_alpha <-list()
+t_val_index <-vector()
+for (i in 1:length(test_w$index_localmax_test_w)){
+  q_val[[i]]<-seq(from = max(test_w$index_localmax_test_w[i]-50,1), to = (test_w$index_localmax_test_w[i]), by = 1)
+  q_alpha[[i]] <- back$z3[q_val[[i]]]
+  min_index <- which.min(q_alpha[[i]])
+
+  if(i==1){
+    t_val_index[i] <-1
+  }else{
+    t_val_index[i] <-length(q_alpha[[i]])-min_index
+  }
+}
+
+test_w <-data.frame(index_test_w,index_localmax_test_w,diff_test_w,value_test_w,time_test_w)
+test_w$beta_val3 <-test_w$index_localmax_test_w
+test_w$alpha_val3 <-test_w$value_test_w
+
+localmax_w2 <- test_w[c("beta_val3","alpha_val3")]
+localmax_w2$t_val_index <-t_val_index
+localmax_w2$new_index <-localmax_w2$beta_val3 - localmax_w2$t_val_index
+localmax_w2$new_index[1] <-localmax_w2$new_index[1] + 1
+localmax_w2$new_value <-back$z3[localmax_w2$new_index]
+
+
+plot(back$time[400:800],back$z3[400:800],type="l",xlab="Time (sec)",ylab="Acceleration (m/s)",main="AP")
+points(localmax_w2$new_index*0.0125,back$z3[localmax_w2$new_index],col="red")
+
+```
+
+```{r}
+localmax_w2 <- unique(localmax_w2)
+localmax_w2$diff3 <-c(60,diff(localmax_w2$new_index))
+
+i=2
+while(i<nrow(localmax_w2)){
+  if (localmax_w2$diff3[i] <=28){
+    if (localmax_w2$new_index[i] < localmax_w2$new_index[i-1]){
+      localmax_w2 <- localmax_w2[-c(i-1), ]
+      rownames(localmax_w2) <- NULL
+      localmax_w2$diff3 <-c(60,diff(localmax_w2$new_index))
+      
+    }else if(localmax_w2$new_index[i-1] < localmax_w2$new_index[i]){
+      localmax_w2 <- localmax_w2[-c(i), ]
+      rownames(localmax_w2) <- NULL
+      localmax_w2$diff3 <-c(60,diff(localmax_w2$new_index))
+      
+    }else if(localmax_w2$new_index[i-1] == localmax_w2$new_index[i]){
+      localmax_w2 <- localmax_w2[-c(i), ]
+      rownames(localmax_w2) <- NULL
+      localmax_w2$diff3 <-c(60,diff(localmax_w2$new_index))
+    }
+    i=2
+  }else if(localmax_w2$diff3[i] >28){
+    i=i+1
+  }
+}
+
+localmax_w2 <-localmax_w2[c("new_index","new_value","diff3")]
+localmax_w2 <- unique(localmax_w2)
+rownames(localmax_w2) <- NULL
+
+plot(back$time[1:800],back$z3[1:800],type="l",xlab="Time (sec)",ylab="Acceleration (m/s)",main="AP")
+points(localmax_w2$new_index*0.0125,back$z3[localmax_w2$new_index],col="red")
+```
+
+alternate heel strikes for left and right
+
+```{r}
+localmax4_w <-localmax_w2[c("new_index","new_value")]
+localmax4_w  <- unique(localmax4_w)
+
+rownames(localmax4_w) <- NULL
+right_heelstrike <- localmax4_w[ c(TRUE,FALSE), ] #odd
+rownames(right_heelstrike) <- NULL
+left_heelstrike <- localmax4_w[ !c(TRUE,FALSE), ] #even
+rownames(right_heelstrike) <- NULL
+
+right_heelstrike$time <- right_heelstrike$new_index*0.0125
+left_heelstrike$time <- left_heelstrike$new_index*0.0125
+
+right_stride_times <- right_heelstrike[c(-2)]
+right_stride_times$stride_time_interval <-c(diff(right_stride_times$time),0)
+
+left_stride_times <- left_heelstrike[c(-2)]
+left_stride_times$stride_time_interval <-c(diff(left_stride_times$time),0)
+
+```
+
+##Visualizations for Toe-offs and Heel Strikes - Trial 2
+
+```{r}
+par(mfrow=c(1,1)) 
+x_mean_left <- left_heelstrike
+x_mean_left$x_mean <-mean(back$x3[0:8])
+par(mfrow=c(1,1)) 
+plot(back$time[0:8], back$x3[0:8], type = "l",xlab="Time (sec)",ylab="Acceleration (m/s)",main="x (Medial-Lateral) Direction - First 0.10 seconds")
+abline(h=x_mean_left$x_mean, col="purple")
+legend("bottomright", legend=c("x direction", "Average of x over 0.10 seconds"),col=c("black", "purple"), lty=1:1, cex=0.8,box.lty=0)
+
+par(mfrow=c(1,1)) 
+plot(pressure$`Time,s`[501:1001],pressure$`LT.Force,N`[501:1001],col="blue",type="l",xlab="Time (sec)",ylab="Force (N)",main="Pressure")
+lines(pressure$`Time,s`[501:1001],pressure$`RT.Force,N`[501:1001],col="red")
+legend("bottomright", legend=c("Left", "Right"),col=c("blue", "red"), lty=1:1, cex=0.8,box.lty=0)
+par(mfrow=c(1,1)) 
+plot(back$time[400:800],back$y3[400:800],type="l",xlab="Time (sec)",ylab="Acceleration (m/s)",main="y (Vertical) Direction - Toe-off events")
+points(right_toeoff$time, right_toeoff$alpha_val3,col="red",pch="R",cex=1.5)
+points(left_toeoff$time, left_toeoff$alpha_val3,col="blue",pch="L",cex=1.5)
+
+plot(back$time[3400:3800], back$z3[3400:3800], type = "l",xlab="Time (sec)",ylab="Acceleration (m/s)",main="z (Anterior-Posterior) Direction - Heel-strike events")
+points(right_heelstrike$time, right_heelstrike$new_value,col="red",pch="R",cex=1.5)
+points(left_heelstrike$time, left_heelstrike$new_value,col="blue",pch="L",cex=1.5)
+```
+
+##Save Trial 2 files
+
+```{r}
+setwd("~/Documents/Sejdic Lab/Gait_PD_2017/Tests-measures/Subject_7_D/2nd_session/2nd_trial")
+write.xlsx(right_stride_times,"right_stride_times_back.xlsx")
+write.xlsx(left_stride_times,"left_stride_times_back.xlsx")
+write.xlsx(right_toeoff,"right_toeoff.xlsx")
+write.xlsx(left_toeoff,"left_toeoff.xlsx")
+write.xlsx(pressure,"pressure.xlsx")
+write.xlsx(back,"back.xlsx")
+```
+
+##Extract Strides
+
+```{r}
+setwd("~/Documents/Sejdic Lab/Gait_PD_2017/Tests-measures/Subject_7_D/2nd_session/2nd_trial")
+library(openxlsx)
+pressure <-read.xlsx("pressure.xlsx", sheet = 1, startRow = 1, colNames = TRUE)
+back <- read.xlsx("back.xlsx", sheet = 1, startRow = 1, colNames = TRUE)
+right_toeoff <- read.xlsx("right_toeoff.xlsx", sheet = 1, startRow = 1, colNames = TRUE)
+left_toeoff <- read.xlsx("left_toeoff.xlsx", sheet = 1, startRow = 1, colNames = TRUE)
+right_heelstrike <- read.xlsx("right_stride_times_back.xlsx", sheet = 1, startRow = 1, colNames = TRUE)
+left_heelstrike <- read.xlsx("left_stride_times_back.xlsx", sheet = 1, startRow = 1, colNames = TRUE)
+
+setwd("~/Documents/Sejdic Lab/Gait_PD_2017/Tests/Subject_7_D/2nd_session/2nd_trial")
+
+chest <- read.csv("MOS2A47130498.csv",skip=10,header=FALSE)
+Lwrist <- read.csv("MOS2A06140534.csv",skip=10,header=FALSE)
+Rwrist <- read.csv("MOS2A06140546.csv",skip=10,header=FALSE)
+Lankle <- read.csv("MOS2A06140541.csv",skip=10,header=FALSE)
+Rankle <- read.csv("MOS2A06140519.csv",skip=10,header=FALSE)
+
+names(chest)[names(chest)=="V1"] <- "y"
+names(chest)[names(chest)=="V2"] <- "x"
+names(chest)[names(chest)=="V3"] <- "z"
+
+names(Lwrist)[names(Lwrist)=="V1"] <- "y"
+names(Lwrist)[names(Lwrist)=="V2"] <- "x"
+names(Lwrist)[names(Lwrist)=="V3"] <- "z"
+
+names(Rwrist)[names(Rwrist)=="V1"] <- "y"
+names(Rwrist)[names(Rwrist)=="V2"] <- "x"
+names(Rwrist)[names(Rwrist)=="V3"] <- "z"
+
+names(Lankle)[names(Lankle)=="V1"] <- "y"
+names(Lankle)[names(Lankle)=="V2"] <- "x"
+names(Lankle)[names(Lankle)=="V3"] <- "z"
+
+names(Rankle)[names(Rankle)=="V1"] <- "y"
+names(Rankle)[names(Rankle)=="V2"] <- "x"
+names(Rankle)[names(Rankle)=="V3"] <- "z"
+
+chest$time <-seq(from = 0.0125, to = 600, by = 0.0125)
+Lankle$time <-seq(from = 0.0125, to = 600, by = 0.0125)
+Lwrist$time <-seq(from = 0.0125, to = 600, by = 0.0125)
+Rankle$time <-seq(from = 0.0125, to = 600, by = 0.0125)
+Rwrist$time <-seq(from = 0.0125, to = 600, by = 0.0125)
+
+#RIGHT STRIDES
+
+right_stride_num <- vector()
+right_stride_back_x <- list()
+right_stride_back_y <- list()
+right_stride_back_z <- list()
+
+right_stride_chest_x <- list()
+right_stride_chest_y <- list()
+right_stride_chest_z <- list()
+
+right_stride_Lankle_x <- list()
+right_stride_Lankle_y <- list()
+right_stride_Lankle_z <- list()
+
+right_stride_Rankle_x <- list()
+right_stride_Rankle_y <- list()
+right_stride_Rankle_z <- list()
+
+right_stride_Lwrist_x <- list()
+right_stride_Lwrist_y <- list()
+right_stride_Lwrist_z <- list()
+
+right_stride_Rwrist_x <- list()
+right_stride_Rwrist_y <- list()
+right_stride_Rwrist_z <- list()
+
+right_stride_index <- list()
+
+k=1
+for (i in 1:nrow(right_heelstrike)){
+  if (i!=nrow(right_heelstrike)){
+    right_stride_num[k] <- k
+    stride_index <- seq(right_heelstrike$new_index[i], right_heelstrike$new_index[i+1], by = 1)
+    right_stride_index[[k]] <- stride_index
+    right_stride_back_x[[k]] <- back$x[stride_index] 
+    right_stride_back_y[[k]] <- back$y[stride_index]
+    right_stride_back_z[[k]] <- back$z[stride_index]
+    
+    right_stride_chest_x[[k]] <- chest$x[stride_index] 
+    right_stride_chest_y[[k]] <- chest$y[stride_index]
+    right_stride_chest_z[[k]] <- chest$z[stride_index]
+    
+    right_stride_Lankle_x[[k]] <- Lankle$x[stride_index] 
+    right_stride_Lankle_y[[k]] <- Lankle$y[stride_index]
+    right_stride_Lankle_z[[k]] <- Lankle$z[stride_index]
+    
+    right_stride_Rankle_x[[k]] <- Rankle$x[stride_index] 
+    right_stride_Rankle_y[[k]] <- Rankle$y[stride_index]
+    right_stride_Rankle_z[[k]] <- Rankle$z[stride_index]
+    
+    right_stride_Lwrist_x[[k]] <- Lwrist$x[stride_index] 
+    right_stride_Lwrist_y[[k]] <- Lwrist$y[stride_index]
+    right_stride_Lwrist_z[[k]] <- Lwrist$z[stride_index]
+    
+    right_stride_Rwrist_x[[k]] <- Rwrist$x[stride_index] 
+    right_stride_Rwrist_y[[k]] <- Rwrist$y[stride_index]
+    right_stride_Rwrist_z[[k]] <- Rwrist$z[stride_index]
+    
+    k=k+1
+  }
+}
+
+right_stride_df <- data.frame(right_stride_num)
+
+right_stride_df$right_stride_index <- right_stride_index
+
+right_stride_df$right_stride_back_x <-right_stride_back_x
+right_stride_df$right_stride_back_y <-right_stride_back_y
+right_stride_df$right_stride_back_z <-right_stride_back_z
+
+right_stride_df$right_stride_chest_x <-right_stride_chest_x
+right_stride_df$right_stride_chest_y <-right_stride_chest_y
+right_stride_df$right_stride_chest_z <-right_stride_chest_z
+
+right_stride_df$right_stride_Lankle_x <-right_stride_Lankle_x
+right_stride_df$right_stride_Lankle_y <-right_stride_Lankle_y
+right_stride_df$right_stride_Lankle_z <-right_stride_Lankle_z
+
+right_stride_df$right_stride_Rankle_x <-right_stride_Rankle_x
+right_stride_df$right_stride_Rankle_y <-right_stride_Rankle_y
+right_stride_df$right_stride_Rankle_z <-right_stride_Rankle_z
+
+right_stride_df$right_stride_Lwrist_x <-right_stride_Lwrist_x
+right_stride_df$right_stride_Lwrist_y <-right_stride_Lwrist_y
+right_stride_df$right_stride_Lwrist_z <-right_stride_Lwrist_z
+
+right_stride_df$right_stride_Rwrist_x <-right_stride_Rwrist_x
+right_stride_df$right_stride_Rwrist_y <-right_stride_Rwrist_y
+right_stride_df$right_stride_Rwrist_z <-right_stride_Rwrist_z
+
+
+#LEFT STRIDES
+
+left_stride_num <- vector()
+left_stride_back_x <- list()
+left_stride_back_y <- list()
+left_stride_back_z <- list()
+
+left_stride_chest_x <- list()
+left_stride_chest_y <- list()
+left_stride_chest_z <- list()
+
+left_stride_Lankle_x <- list()
+left_stride_Lankle_y <- list()
+left_stride_Lankle_z <- list()
+
+left_stride_Rankle_x <- list()
+left_stride_Rankle_y <- list()
+left_stride_Rankle_z <- list()
+
+left_stride_Lwrist_x <- list()
+left_stride_Lwrist_y <- list()
+left_stride_Lwrist_z <- list()
+
+left_stride_Rwrist_x <- list()
+left_stride_Rwrist_y <- list()
+left_stride_Rwrist_z <- list()
+
+left_stride_index <- list()
+
+k=1
+for (i in 1:nrow(left_heelstrike)){
+  if (i!=nrow(left_heelstrike)){
+    left_stride_num[k] <- k
+    stride_index <- seq(left_heelstrike$new_index[i], left_heelstrike$new_index[i+1], by = 1)
+    left_stride_index[[k]] <- stride_index
+    left_stride_back_x[[k]] <- back$x[stride_index] 
+    left_stride_back_y[[k]] <- back$y[stride_index]
+    left_stride_back_z[[k]] <- back$z[stride_index]
+    
+    left_stride_chest_x[[k]] <- chest$x[stride_index] 
+    left_stride_chest_y[[k]] <- chest$y[stride_index]
+    left_stride_chest_z[[k]] <- chest$z[stride_index]
+    
+    left_stride_Lankle_x[[k]] <- Lankle$x[stride_index] 
+    left_stride_Lankle_y[[k]] <- Lankle$y[stride_index]
+    left_stride_Lankle_z[[k]] <- Lankle$z[stride_index]
+    
+    left_stride_Rankle_x[[k]] <- Rankle$x[stride_index] 
+    left_stride_Rankle_y[[k]] <- Rankle$y[stride_index]
+    left_stride_Rankle_z[[k]] <- Rankle$z[stride_index]
+    
+    left_stride_Lwrist_x[[k]] <- Lwrist$x[stride_index] 
+    left_stride_Lwrist_y[[k]] <- Lwrist$y[stride_index]
+    left_stride_Lwrist_z[[k]] <- Lwrist$z[stride_index]
+    
+    left_stride_Rwrist_x[[k]] <- Rwrist$x[stride_index] 
+    left_stride_Rwrist_y[[k]] <- Rwrist$y[stride_index]
+    left_stride_Rwrist_z[[k]] <- Rwrist$z[stride_index]
+    
+    k=k+1
+  }
+}
+
+left_stride_df <- data.frame(left_stride_num)
+
+left_stride_df$left_stride_index <- left_stride_index
+
+left_stride_df$left_stride_back_x <-left_stride_back_x
+left_stride_df$left_stride_back_y <-left_stride_back_y
+left_stride_df$left_stride_back_z <-left_stride_back_z
+
+left_stride_df$left_stride_chest_x <-left_stride_chest_x
+left_stride_df$left_stride_chest_y <-left_stride_chest_y
+left_stride_df$left_stride_chest_z <-left_stride_chest_z
+
+left_stride_df$left_stride_Lankle_x <-left_stride_Lankle_x
+left_stride_df$left_stride_Lankle_y <-left_stride_Lankle_y
+left_stride_df$left_stride_Lankle_z <-left_stride_Lankle_z
+
+left_stride_df$left_stride_Rankle_x <-left_stride_Rankle_x
+left_stride_df$left_stride_Rankle_y <-left_stride_Rankle_y
+left_stride_df$left_stride_Rankle_z <-left_stride_Rankle_z
+
+left_stride_df$left_stride_Lwrist_x <-left_stride_Lwrist_x
+left_stride_df$left_stride_Lwrist_y <-left_stride_Lwrist_y
+left_stride_df$left_stride_Lwrist_z <-left_stride_Lwrist_z
+
+left_stride_df$left_stride_Rwrist_x <-left_stride_Rwrist_x
+left_stride_df$left_stride_Rwrist_y <-left_stride_Rwrist_y
+left_stride_df$left_stride_Rwrist_z <-left_stride_Rwrist_z
+
+setwd("~/Documents/Sejdic Lab/Gait_PD_2017/Tests-measures/Subject_7_D/2nd_session/2nd_trial")
+saveRDS(left_stride_df,"left_stride_df.rds")
+saveRDS(right_stride_df,"right_stride_df.rds")
+
+write.xlsx(chest,"chest.xlsx")
+write.xlsx(Lankle,"Lankle.xlsx")
+write.xlsx(Rankle,"Rankle.xlsx")
+write.xlsx(Lwrist,"Lwrist.xlsx")
+write.xlsx(Rwrist,"Rwrist.xlsx")
+```
+
+##Combine Trial 1 and Trial 2 and Extract Features
+```{r}
+setwd("~/Documents/Sejdic Lab/Gait_PD_2017/Tests-measures/Subject_7_D/2nd_session/1st_trial")
+left_stride_t1_df <- readRDS("left_stride_df.rds")
+right_stride_t1_df <- readRDS("right_stride_df.rds")
+
+left_length = nrow(left_stride_t1_df) + 1
+right_length = nrow(right_stride_t1_df) + 1
+
+library(openxlsx)
+left_toeoff_t1_df <- read.xlsx("left_toeoff.xlsx")
+right_toeoff_t1_df <- read.xlsx("right_toeoff.xlsx")
+
+left_toeoff_t1_df$left_stride_num <- seq(1,nrow(left_toeoff_t1_df),by=1)
+right_toeoff_t1_df$right_stride_num <- seq(1,nrow(right_toeoff_t1_df),by=1)
+left_toeoff_t1_df <- left_toeoff_t1_df[c("left_stride_num","beta_val3")]
+right_toeoff_t1_df <- right_toeoff_t1_df[c("right_stride_num","beta_val3")]
+
+left_stride_t1_df <- merge(left_stride_t1_df,left_toeoff_t1_df,by="left_stride_num",all.x=TRUE)
+right_stride_t1_df <- merge(right_stride_t1_df,right_toeoff_t1_df,by="right_stride_num",all.x=TRUE)
+
+left_stride_t1_df$task <-0 #single task
+right_stride_t1_df$task <-0 #single task
+
+left_stride_t1_df$stance_time <- NA
+left_stride_t1_df$stance_length <- NA
+left_stride_t1_df$swing_time <- NA
+left_stride_t1_df$swing_length <- NA
+
+for (i in 1:nrow(left_stride_t1_df)){ 
+  myrange <- range(left_stride_t1_df$left_stride_index[[i]])
+  for (k in 1:nrow(left_stride_t1_df)){
+    if (is.na(left_stride_t1_df$beta_val3[k])==FALSE){
+    if(min(myrange) <= left_stride_t1_df$beta_val3[k] & max(myrange) >= left_stride_t1_df$beta_val3[k] ){
+    left_stride_t1_df$stance_time[i] <- (left_stride_t1_df$beta_val3[k]-min(myrange))*0.0125
+    left_stride_t1_df$stance_length[i] <- (left_stride_t1_df$stance_time[i])*(0.983488)
+    left_stride_t1_df$swing_time[i] <- (max(myrange)-left_stride_t1_df$beta_val3[k])*0.0125
+    left_stride_t1_df$swing_length[i] <- (left_stride_t1_df$swing_time[i])*(0.983488)
+    k=k+1
+      }}
+  }
+}
+
+right_stride_t1_df$stance_time <- NA
+right_stride_t1_df$stance_length <- NA
+right_stride_t1_df$swing_time <- NA
+right_stride_t1_df$swing_length <- NA
+
+for (i in 1:nrow(right_stride_t1_df)){ 
+  myrange <- range(right_stride_t1_df$right_stride_index[[i]])
+  for (k in 1:nrow(right_stride_t1_df)){
+    if (is.na(right_stride_t1_df$beta_val3[k])==FALSE){
+    if(min(myrange) <= right_stride_t1_df$beta_val3[k] & max(myrange) >= right_stride_t1_df$beta_val3[k] ){
+    right_stride_t1_df$stance_time[i] <- (right_stride_t1_df$beta_val3[k]-min(myrange))*0.0125
+    right_stride_t1_df$stance_length[i] <- (right_stride_t1_df$stance_time[i])*(0.983488)
+    right_stride_t1_df$swing_time[i] <- (max(myrange)-right_stride_t1_df$beta_val3[k])*0.0125
+    right_stride_t1_df$swing_length[i] <- (right_stride_t1_df$swing_time[i])*(0.983488)
+    k=k+1
+      }}
+  }
+}
+
+setwd("~/Documents/Sejdic Lab/Gait_PD_2017/Tests-measures/Subject_7_D/2nd_session/2nd_trial")
+left_stride_t2_df <- readRDS("left_stride_df.rds")
+right_stride_t2_df <- readRDS("right_stride_df.rds")
+
+left_toeoff_t2_df <- read.xlsx("left_toeoff.xlsx")
+right_toeoff_t2_df <- read.xlsx("right_toeoff.xlsx")
+
+left_toeoff_t2_df$left_stride_num <- seq(1,nrow(left_toeoff_t2_df),by=1)
+right_toeoff_t2_df$right_stride_num <- seq(1,nrow(right_toeoff_t2_df),by=1)
+left_toeoff_t2_df <- left_toeoff_t1_df[c("left_stride_num","beta_val3")]
+right_toeoff_t2_df <- right_toeoff_t1_df[c("right_stride_num","beta_val3")]
+
+left_stride_t2_df <- merge(left_stride_t2_df,left_toeoff_t2_df,by="left_stride_num",all.x=TRUE)
+right_stride_t2_df <- merge(right_stride_t2_df,right_toeoff_t2_df,by="right_stride_num",all.x=TRUE)
+
+
+left_stride_t2_df$task <-1 #dual task
+right_stride_t2_df$task <-1 #dual task
+
+left_stride_t2_df$stance_time <- NA
+left_stride_t2_df$stance_length <- NA
+left_stride_t2_df$swing_time <- NA
+left_stride_t2_df$swing_length <- NA
+
+for (i in 1:nrow(left_stride_t2_df)){ 
+  myrange <- range(left_stride_t2_df$left_stride_index[[i]])
+  for (k in 1:nrow(left_stride_t2_df)){
+    if (is.na(left_stride_t2_df$beta_val3[k])==FALSE){
+    if(min(myrange) <= left_stride_t2_df$beta_val3[k] & max(myrange) >= left_stride_t2_df$beta_val3[k] ){
+    left_stride_t2_df$stance_time[i] <- (left_stride_t2_df$beta_val3[k]-min(myrange))*0.0125
+    left_stride_t2_df$stance_length[i] <- (left_stride_t2_df$stance_time[i])*(0.983488)
+    left_stride_t2_df$swing_time[i] <- (max(myrange)-left_stride_t2_df$beta_val3[k])*0.0125
+    left_stride_t2_df$swing_length[i] <- (left_stride_t2_df$swing_time[i])*(0.983488)
+    k=k+1
+      }}
+  }
+}
+
+right_stride_t2_df$stance_time <- NA
+right_stride_t2_df$stance_length <- NA
+right_stride_t2_df$swing_time <- NA
+right_stride_t2_df$swing_length <- NA
+
+for (i in 1:nrow(right_stride_t2_df)){ 
+  myrange <- range(right_stride_t2_df$right_stride_index[[i]])
+  for (k in 1:nrow(right_stride_t2_df)){
+    if (is.na(right_stride_t2_df$beta_val3[k])==FALSE){
+    if(min(myrange) <= right_stride_t2_df$beta_val3[k] & max(myrange) >= right_stride_t2_df$beta_val3[k] ){
+    right_stride_t2_df$stance_time[i] <- (right_stride_t2_df$beta_val3[k]-min(myrange))*0.0125
+    right_stride_t2_df$stance_length[i] <- (right_stride_t2_df$stance_time[i])*(0.983488)
+    right_stride_t2_df$swing_time[i] <- (max(myrange)-right_stride_t2_df$beta_val3[k])*0.0125
+    right_stride_t2_df$swing_length[i] <- (right_stride_t2_df$swing_time[i])*(0.983488)
+    k=k+1
+      }}
+  }
+}
+
+
+#combine left strides
+left_stride_session1_df <- rbind(left_stride_t1_df, left_stride_t2_df)
+
+#combine right strides
+right_stride_session1_df <- rbind(right_stride_t1_df, right_stride_t2_df)
+
+setwd("~/Documents/Sejdic Lab/Gait_PD_2017/Tests-measures/Subject_7_D/2nd_session/")
+k=1
+for (i in 1:nrow(left_stride_session1_df)){
+  myrange <- range(left_stride_session1_df$left_stride_index[[i]])
+  left_stride_session1_df$stride_time[i] <- (max(myrange)-min(myrange))*0.0125
+  
+  left_stride_session1_df$stride_length[i] <- (left_stride_session1_df$stride_time[i])*(0.983488)
+  
+  left_stride_session1_df$average_back_x[i] <- mean(left_stride_session1_df$left_stride_back_x[[i]])
+  left_stride_session1_df$average_back_y[i] <- mean(left_stride_session1_df$left_stride_back_y[[i]])
+  left_stride_session1_df$average_back_z[i] <- mean(left_stride_session1_df$left_stride_back_z[[i]])
+  
+  left_stride_session1_df$sd_back_x[i] <- sd(left_stride_session1_df$left_stride_back_x[[i]])
+  left_stride_session1_df$sd_back_y[i] <- sd(left_stride_session1_df$left_stride_back_y[[i]])
+  left_stride_session1_df$sd_back_z[i] <- sd(left_stride_session1_df$left_stride_back_z[[i]])
+  
+  left_stride_session1_df$cov_back_xy[i] <- cov(left_stride_session1_df$left_stride_back_x[[i]],left_stride_session1_df$left_stride_back_y[[i]])
+  left_stride_session1_df$cov_back_yz[i] <- cov(left_stride_session1_df$left_stride_back_y[[i]],left_stride_session1_df$left_stride_back_z[[i]])
+  left_stride_session1_df$cov_back_zx[i] <- cov(left_stride_session1_df$left_stride_back_z[[i]],left_stride_session1_df$left_stride_back_x[[i]])
+  
+  left_stride_session1_df$cor_back_xy[i] <- cor(left_stride_session1_df$left_stride_back_x[[i]],left_stride_session1_df$left_stride_back_y[[i]])
+  left_stride_session1_df$cor_back_yz[i] <- cor(left_stride_session1_df$left_stride_back_y[[i]],left_stride_session1_df$left_stride_back_z[[i]])
+  left_stride_session1_df$cor_back_zx[i] <- cor(left_stride_session1_df$left_stride_back_z[[i]],left_stride_session1_df$left_stride_back_x[[i]])
+  
+  
+  left_stride_session1_df$average_chest_x[i] <- mean(left_stride_session1_df$left_stride_chest_x[[i]])
+  left_stride_session1_df$average_chest_y[i] <- mean(left_stride_session1_df$left_stride_chest_y[[i]])
+  left_stride_session1_df$average_chest_z[i] <- mean(left_stride_session1_df$left_stride_chest_z[[i]])
+  
+  left_stride_session1_df$sd_chest_x[i] <- sd(left_stride_session1_df$left_stride_chest_x[[i]])
+  left_stride_session1_df$sd_chest_y[i] <- sd(left_stride_session1_df$left_stride_chest_y[[i]])
+  left_stride_session1_df$sd_chest_z[i] <- sd(left_stride_session1_df$left_stride_chest_z[[i]])
+  
+  left_stride_session1_df$cov_chest_xy[i] <- cov(left_stride_session1_df$left_stride_chest_x[[i]],left_stride_session1_df$left_stride_chest_y[[i]])
+  left_stride_session1_df$cov_chest_yz[i] <- cov(left_stride_session1_df$left_stride_chest_y[[i]],left_stride_session1_df$left_stride_chest_z[[i]])
+  left_stride_session1_df$cov_chest_zx[i] <- cov(left_stride_session1_df$left_stride_chest_z[[i]],left_stride_session1_df$left_stride_chest_x[[i]])
+  
+  left_stride_session1_df$cor_chest_xy[i] <- cor(left_stride_session1_df$left_stride_chest_x[[i]],left_stride_session1_df$left_stride_chest_y[[i]])
+  left_stride_session1_df$cor_chest_yz[i] <- cor(left_stride_session1_df$left_stride_chest_y[[i]],left_stride_session1_df$left_stride_chest_z[[i]])
+  left_stride_session1_df$cor_chest_zx[i] <- cor(left_stride_session1_df$left_stride_chest_z[[i]],left_stride_session1_df$left_stride_chest_x[[i]])
+  
+  left_stride_session1_df$average_Lankle_x[i] <- mean(left_stride_session1_df$left_stride_Lankle_x[[i]])
+  left_stride_session1_df$average_Lankle_y[i] <- mean(left_stride_session1_df$left_stride_Lankle_y[[i]])
+  left_stride_session1_df$average_Lankle_z[i] <- mean(left_stride_session1_df$left_stride_Lankle_z[[i]])
+  
+  left_stride_session1_df$sd_Lankle_x[i] <- sd(left_stride_session1_df$left_stride_Lankle_x[[i]])
+  left_stride_session1_df$sd_Lankle_y[i] <- sd(left_stride_session1_df$left_stride_Lankle_y[[i]])
+  left_stride_session1_df$sd_Lankle_z[i] <- sd(left_stride_session1_df$left_stride_Lankle_z[[i]])
+  
+  left_stride_session1_df$cov_Lankle_xy[i] <- cov(left_stride_session1_df$left_stride_Lankle_x[[i]],left_stride_session1_df$left_stride_Lankle_y[[i]])
+  left_stride_session1_df$cov_Lankle_yz[i] <- cov(left_stride_session1_df$left_stride_Lankle_y[[i]],left_stride_session1_df$left_stride_Lankle_z[[i]])
+  left_stride_session1_df$cov_Lankle_zx[i] <- cov(left_stride_session1_df$left_stride_Lankle_z[[i]],left_stride_session1_df$left_stride_Lankle_x[[i]])
+  
+  left_stride_session1_df$cor_Lankle_xy[i] <- cor(left_stride_session1_df$left_stride_Lankle_x[[i]],left_stride_session1_df$left_stride_Lankle_y[[i]])
+  left_stride_session1_df$cor_Lankle_yz[i] <- cor(left_stride_session1_df$left_stride_Lankle_y[[i]],left_stride_session1_df$left_stride_Lankle_z[[i]])
+  left_stride_session1_df$cor_Lankle_zx[i] <- cor(left_stride_session1_df$left_stride_Lankle_z[[i]],left_stride_session1_df$left_stride_Lankle_x[[i]])
+  
+  
+  left_stride_session1_df$average_Rankle_x[i] <- mean(left_stride_session1_df$left_stride_Rankle_x[[i]])
+  left_stride_session1_df$average_Rankle_y[i] <- mean(left_stride_session1_df$left_stride_Rankle_y[[i]])
+  left_stride_session1_df$average_Rankle_z[i] <- mean(left_stride_session1_df$left_stride_Rankle_z[[i]])
+  
+  left_stride_session1_df$sd_Rankle_x[i] <- sd(left_stride_session1_df$left_stride_Rankle_x[[i]])
+  left_stride_session1_df$sd_Rankle_y[i] <- sd(left_stride_session1_df$left_stride_Rankle_y[[i]])
+  left_stride_session1_df$sd_Rankle_z[i] <- sd(left_stride_session1_df$left_stride_Rankle_z[[i]])
+  
+  left_stride_session1_df$cov_Rankle_xy[i] <- cov(left_stride_session1_df$left_stride_Rankle_x[[i]],left_stride_session1_df$left_stride_Rankle_y[[i]])
+  left_stride_session1_df$cov_Rankle_yz[i] <- cov(left_stride_session1_df$left_stride_Rankle_y[[i]],left_stride_session1_df$left_stride_Rankle_z[[i]])
+  left_stride_session1_df$cov_Rankle_zx[i] <- cov(left_stride_session1_df$left_stride_Rankle_z[[i]],left_stride_session1_df$left_stride_Rankle_x[[i]])
+  
+  left_stride_session1_df$cor_Rankle_xy[i] <- cor(left_stride_session1_df$left_stride_Rankle_x[[i]],left_stride_session1_df$left_stride_Rankle_y[[i]])
+  left_stride_session1_df$cor_Rankle_yz[i] <- cor(left_stride_session1_df$left_stride_Rankle_y[[i]],left_stride_session1_df$left_stride_Rankle_z[[i]])
+  left_stride_session1_df$cor_Rankle_zx[i] <- cor(left_stride_session1_df$left_stride_Rankle_z[[i]],left_stride_session1_df$left_stride_Rankle_x[[i]])
+  
+  
+  left_stride_session1_df$average_Lwrist_x[i] <- mean(left_stride_session1_df$left_stride_Lwrist_x[[i]])
+  left_stride_session1_df$average_Lwrist_y[i] <- mean(left_stride_session1_df$left_stride_Lwrist_y[[i]])
+  left_stride_session1_df$average_Lwrist_z[i] <- mean(left_stride_session1_df$left_stride_Lwrist_z[[i]])
+  
+  left_stride_session1_df$sd_Lwrist_x[i] <- sd(left_stride_session1_df$left_stride_Lwrist_x[[i]])
+  left_stride_session1_df$sd_Lwrist_y[i] <- sd(left_stride_session1_df$left_stride_Lwrist_y[[i]])
+  left_stride_session1_df$sd_Lwrist_z[i] <- sd(left_stride_session1_df$left_stride_Lwrist_z[[i]])
+  
+  left_stride_session1_df$cov_Lwrist_xy[i] <- cov(left_stride_session1_df$left_stride_Lwrist_x[[i]],left_stride_session1_df$left_stride_Lwrist_y[[i]])
+  left_stride_session1_df$cov_Lwrist_yz[i] <- cov(left_stride_session1_df$left_stride_Lwrist_y[[i]],left_stride_session1_df$left_stride_Lwrist_z[[i]])
+  left_stride_session1_df$cov_Lwrist_zx[i] <- cov(left_stride_session1_df$left_stride_Lwrist_z[[i]],left_stride_session1_df$left_stride_Lwrist_x[[i]])
+  
+  left_stride_session1_df$cor_Lwrist_xy[i] <- cor(left_stride_session1_df$left_stride_Lwrist_x[[i]],left_stride_session1_df$left_stride_Lwrist_y[[i]])
+  left_stride_session1_df$cor_Lwrist_yz[i] <- cor(left_stride_session1_df$left_stride_Lwrist_y[[i]],left_stride_session1_df$left_stride_Lwrist_z[[i]])
+  left_stride_session1_df$cor_Lwrist_zx[i] <- cor(left_stride_session1_df$left_stride_Lwrist_z[[i]],left_stride_session1_df$left_stride_Lwrist_x[[i]])
+  
+  
+  left_stride_session1_df$average_Rwrist_x[i] <- mean(left_stride_session1_df$left_stride_Rwrist_x[[i]])
+  left_stride_session1_df$average_Rwrist_y[i] <- mean(left_stride_session1_df$left_stride_Rwrist_y[[i]])
+  left_stride_session1_df$average_Rwrist_z[i] <- mean(left_stride_session1_df$left_stride_Rwrist_z[[i]])
+  
+  left_stride_session1_df$sd_Rwrist_x[i] <- sd(left_stride_session1_df$left_stride_Rwrist_x[[i]])
+  left_stride_session1_df$sd_Rwrist_y[i] <- sd(left_stride_session1_df$left_stride_Rwrist_y[[i]])
+  left_stride_session1_df$sd_Rwrist_z[i] <- sd(left_stride_session1_df$left_stride_Rwrist_z[[i]])
+  
+  left_stride_session1_df$cov_Rwrist_xy[i] <- cov(left_stride_session1_df$left_stride_Rwrist_x[[i]],left_stride_session1_df$left_stride_Rwrist_y[[i]])
+  left_stride_session1_df$cov_Rwrist_yz[i] <- cov(left_stride_session1_df$left_stride_Rwrist_y[[i]],left_stride_session1_df$left_stride_Rwrist_z[[i]])
+  left_stride_session1_df$cov_Rwrist_zx[i] <- cov(left_stride_session1_df$left_stride_Rwrist_z[[i]],left_stride_session1_df$left_stride_Rwrist_x[[i]])
+  
+  left_stride_session1_df$cor_Rwrist_xy[i] <- cor(left_stride_session1_df$left_stride_Rwrist_x[[i]],left_stride_session1_df$left_stride_Rwrist_y[[i]])
+  left_stride_session1_df$cor_Rwrist_yz[i] <- cor(left_stride_session1_df$left_stride_Rwrist_y[[i]],left_stride_session1_df$left_stride_Rwrist_z[[i]])
+  left_stride_session1_df$cor_Rwrist_zx[i] <- cor(left_stride_session1_df$left_stride_Rwrist_z[[i]],left_stride_session1_df$left_stride_Rwrist_x[[i]])
+  
+}
+
+left_stride_session1_master_y <- data.frame(left_stride_session1_df[,22])
+left_stride_session1_master_x <- left_stride_session1_df[,23:100]
+
+saveRDS(left_stride_session1_master_y,"left_stride_session1_master_y.rds")
+saveRDS(left_stride_session1_master_x,"left_stride_session1_master_x.rds")
+saveRDS(left_stride_session1_df,"left_stride_session1_df.rds")
+#------------------------------------------------------------------------------------------------------------------------------------
+
+k=1
+for (i in 1:nrow(right_stride_session1_df)){
+  
+  myrange <- range(right_stride_session1_df$right_stride_index[[i]])
+  right_stride_session1_df$stride_time[i] <- (max(myrange)-min(myrange))*0.0125
+  
+  right_stride_session1_df$stride_length[i] <- (right_stride_session1_df$stride_time[i])*(0.983488)
+  
+  
+  right_stride_session1_df$average_back_x[i] <- mean(right_stride_session1_df$right_stride_back_x[[i]])
+  right_stride_session1_df$average_back_y[i] <- mean(right_stride_session1_df$right_stride_back_y[[i]])
+  right_stride_session1_df$average_back_z[i] <- mean(right_stride_session1_df$right_stride_back_z[[i]])
+  
+  right_stride_session1_df$sd_back_x[i] <- sd(right_stride_session1_df$right_stride_back_x[[i]])
+  right_stride_session1_df$sd_back_y[i] <- sd(right_stride_session1_df$right_stride_back_y[[i]])
+  right_stride_session1_df$sd_back_z[i] <- sd(right_stride_session1_df$right_stride_back_z[[i]])
+  
+  right_stride_session1_df$cov_back_xy[i] <- cov(right_stride_session1_df$right_stride_back_x[[i]],right_stride_session1_df$right_stride_back_y[[i]])
+  right_stride_session1_df$cov_back_yz[i] <- cov(right_stride_session1_df$right_stride_back_y[[i]],right_stride_session1_df$right_stride_back_z[[i]])
+  right_stride_session1_df$cov_back_zx[i] <- cov(right_stride_session1_df$right_stride_back_z[[i]],right_stride_session1_df$right_stride_back_x[[i]])
+  
+  right_stride_session1_df$cor_back_xy[i] <- cor(right_stride_session1_df$right_stride_back_x[[i]],right_stride_session1_df$right_stride_back_y[[i]])
+  right_stride_session1_df$cor_back_yz[i] <- cor(right_stride_session1_df$right_stride_back_y[[i]],right_stride_session1_df$right_stride_back_z[[i]])
+  right_stride_session1_df$cor_back_zx[i] <- cor(right_stride_session1_df$right_stride_back_z[[i]],right_stride_session1_df$right_stride_back_x[[i]])
+  
+  
+  right_stride_session1_df$average_chest_x[i] <- mean(right_stride_session1_df$right_stride_chest_x[[i]])
+  right_stride_session1_df$average_chest_y[i] <- mean(right_stride_session1_df$right_stride_chest_y[[i]])
+  right_stride_session1_df$average_chest_z[i] <- mean(right_stride_session1_df$right_stride_chest_z[[i]])
+  
+  right_stride_session1_df$sd_chest_x[i] <- sd(right_stride_session1_df$right_stride_chest_x[[i]])
+  right_stride_session1_df$sd_chest_y[i] <- sd(right_stride_session1_df$right_stride_chest_y[[i]])
+  right_stride_session1_df$sd_chest_z[i] <- sd(right_stride_session1_df$right_stride_chest_z[[i]])
+  
+  right_stride_session1_df$cov_chest_xy[i] <- cov(right_stride_session1_df$right_stride_chest_x[[i]],right_stride_session1_df$right_stride_chest_y[[i]])
+  right_stride_session1_df$cov_chest_yz[i] <- cov(right_stride_session1_df$right_stride_chest_y[[i]],right_stride_session1_df$right_stride_chest_z[[i]])
+  right_stride_session1_df$cov_chest_zx[i] <- cov(right_stride_session1_df$right_stride_chest_z[[i]],right_stride_session1_df$right_stride_chest_x[[i]])
+  
+  right_stride_session1_df$cor_chest_xy[i] <- cor(right_stride_session1_df$right_stride_chest_x[[i]],right_stride_session1_df$right_stride_chest_y[[i]])
+  right_stride_session1_df$cor_chest_yz[i] <- cor(right_stride_session1_df$right_stride_chest_y[[i]],right_stride_session1_df$right_stride_chest_z[[i]])
+  right_stride_session1_df$cor_chest_zx[i] <- cor(right_stride_session1_df$right_stride_chest_z[[i]],right_stride_session1_df$right_stride_chest_x[[i]])
+  
+  right_stride_session1_df$average_Lankle_x[i] <- mean(right_stride_session1_df$right_stride_Lankle_x[[i]])
+  right_stride_session1_df$average_Lankle_y[i] <- mean(right_stride_session1_df$right_stride_Lankle_y[[i]])
+  right_stride_session1_df$average_Lankle_z[i] <- mean(right_stride_session1_df$right_stride_Lankle_z[[i]])
+  
+  right_stride_session1_df$sd_Lankle_x[i] <- sd(right_stride_session1_df$right_stride_Lankle_x[[i]])
+  right_stride_session1_df$sd_Lankle_y[i] <- sd(right_stride_session1_df$right_stride_Lankle_y[[i]])
+  right_stride_session1_df$sd_Lankle_z[i] <- sd(right_stride_session1_df$right_stride_Lankle_z[[i]])
+  
+  right_stride_session1_df$cov_Lankle_xy[i] <- cov(right_stride_session1_df$right_stride_Lankle_x[[i]],right_stride_session1_df$right_stride_Lankle_y[[i]])
+  right_stride_session1_df$cov_Lankle_yz[i] <- cov(right_stride_session1_df$right_stride_Lankle_y[[i]],right_stride_session1_df$right_stride_Lankle_z[[i]])
+  right_stride_session1_df$cov_Lankle_zx[i] <- cov(right_stride_session1_df$right_stride_Lankle_z[[i]],right_stride_session1_df$right_stride_Lankle_x[[i]])
+  
+  right_stride_session1_df$cor_Lankle_xy[i] <- cor(right_stride_session1_df$right_stride_Lankle_x[[i]],right_stride_session1_df$right_stride_Lankle_y[[i]])
+  right_stride_session1_df$cor_Lankle_yz[i] <- cor(right_stride_session1_df$right_stride_Lankle_y[[i]],right_stride_session1_df$right_stride_Lankle_z[[i]])
+  right_stride_session1_df$cor_Lankle_zx[i] <- cor(right_stride_session1_df$right_stride_Lankle_z[[i]],right_stride_session1_df$right_stride_Lankle_x[[i]])
+  
+  
+  right_stride_session1_df$average_Rankle_x[i] <- mean(right_stride_session1_df$right_stride_Rankle_x[[i]])
+  right_stride_session1_df$average_Rankle_y[i] <- mean(right_stride_session1_df$right_stride_Rankle_y[[i]])
+  right_stride_session1_df$average_Rankle_z[i] <- mean(right_stride_session1_df$right_stride_Rankle_z[[i]])
+  
+  right_stride_session1_df$sd_Rankle_x[i] <- sd(right_stride_session1_df$right_stride_Rankle_x[[i]])
+  right_stride_session1_df$sd_Rankle_y[i] <- sd(right_stride_session1_df$right_stride_Rankle_y[[i]])
+  right_stride_session1_df$sd_Rankle_z[i] <- sd(right_stride_session1_df$right_stride_Rankle_z[[i]])
+  
+  right_stride_session1_df$cov_Rankle_xy[i] <- cov(right_stride_session1_df$right_stride_Rankle_x[[i]],right_stride_session1_df$right_stride_Rankle_y[[i]])
+  right_stride_session1_df$cov_Rankle_yz[i] <- cov(right_stride_session1_df$right_stride_Rankle_y[[i]],right_stride_session1_df$right_stride_Rankle_z[[i]])
+  right_stride_session1_df$cov_Rankle_zx[i] <- cov(right_stride_session1_df$right_stride_Rankle_z[[i]],right_stride_session1_df$right_stride_Rankle_x[[i]])
+  
+  right_stride_session1_df$cor_Rankle_xy[i] <- cor(right_stride_session1_df$right_stride_Rankle_x[[i]],right_stride_session1_df$right_stride_Rankle_y[[i]])
+  right_stride_session1_df$cor_Rankle_yz[i] <- cor(right_stride_session1_df$right_stride_Rankle_y[[i]],right_stride_session1_df$right_stride_Rankle_z[[i]])
+  right_stride_session1_df$cor_Rankle_zx[i] <- cor(right_stride_session1_df$right_stride_Rankle_z[[i]],right_stride_session1_df$right_stride_Rankle_x[[i]])
+  
+  
+  right_stride_session1_df$average_Lwrist_x[i] <- mean(right_stride_session1_df$right_stride_Lwrist_x[[i]])
+  right_stride_session1_df$average_Lwrist_y[i] <- mean(right_stride_session1_df$right_stride_Lwrist_y[[i]])
+  right_stride_session1_df$average_Lwrist_z[i] <- mean(right_stride_session1_df$right_stride_Lwrist_z[[i]])
+  
+  right_stride_session1_df$sd_Lwrist_x[i] <- sd(right_stride_session1_df$right_stride_Lwrist_x[[i]])
+  right_stride_session1_df$sd_Lwrist_y[i] <- sd(right_stride_session1_df$right_stride_Lwrist_y[[i]])
+  right_stride_session1_df$sd_Lwrist_z[i] <- sd(right_stride_session1_df$right_stride_Lwrist_z[[i]])
+  
+  right_stride_session1_df$cov_Lwrist_xy[i] <- cov(right_stride_session1_df$right_stride_Lwrist_x[[i]],right_stride_session1_df$right_stride_Lwrist_y[[i]])
+  right_stride_session1_df$cov_Lwrist_yz[i] <- cov(right_stride_session1_df$right_stride_Lwrist_y[[i]],right_stride_session1_df$right_stride_Lwrist_z[[i]])
+  right_stride_session1_df$cov_Lwrist_zx[i] <- cov(right_stride_session1_df$right_stride_Lwrist_z[[i]],right_stride_session1_df$right_stride_Lwrist_x[[i]])
+  
+  right_stride_session1_df$cor_Lwrist_xy[i] <- cor(right_stride_session1_df$right_stride_Lwrist_x[[i]],right_stride_session1_df$right_stride_Lwrist_y[[i]])
+  right_stride_session1_df$cor_Lwrist_yz[i] <- cor(right_stride_session1_df$right_stride_Lwrist_y[[i]],right_stride_session1_df$right_stride_Lwrist_z[[i]])
+  right_stride_session1_df$cor_Lwrist_zx[i] <- cor(right_stride_session1_df$right_stride_Lwrist_z[[i]],right_stride_session1_df$right_stride_Lwrist_x[[i]])
+  
+  
+  right_stride_session1_df$average_Rwrist_x[i] <- mean(right_stride_session1_df$right_stride_Rwrist_x[[i]])
+  right_stride_session1_df$average_Rwrist_y[i] <- mean(right_stride_session1_df$right_stride_Rwrist_y[[i]])
+  right_stride_session1_df$average_Rwrist_z[i] <- mean(right_stride_session1_df$right_stride_Rwrist_z[[i]])
+  
+  right_stride_session1_df$sd_Rwrist_x[i] <- sd(right_stride_session1_df$right_stride_Rwrist_x[[i]])
+  right_stride_session1_df$sd_Rwrist_y[i] <- sd(right_stride_session1_df$right_stride_Rwrist_y[[i]])
+  right_stride_session1_df$sd_Rwrist_z[i] <- sd(right_stride_session1_df$right_stride_Rwrist_z[[i]])
+  
+  right_stride_session1_df$cov_Rwrist_xy[i] <- cov(right_stride_session1_df$right_stride_Rwrist_x[[i]],right_stride_session1_df$right_stride_Rwrist_y[[i]])
+  right_stride_session1_df$cov_Rwrist_yz[i] <- cov(right_stride_session1_df$right_stride_Rwrist_y[[i]],right_stride_session1_df$right_stride_Rwrist_z[[i]])
+  right_stride_session1_df$cov_Rwrist_zx[i] <- cov(right_stride_session1_df$right_stride_Rwrist_z[[i]],right_stride_session1_df$right_stride_Rwrist_x[[i]])
+  
+  right_stride_session1_df$cor_Rwrist_xy[i] <- cor(right_stride_session1_df$right_stride_Rwrist_x[[i]],right_stride_session1_df$right_stride_Rwrist_y[[i]])
+  right_stride_session1_df$cor_Rwrist_yz[i] <- cor(right_stride_session1_df$right_stride_Rwrist_y[[i]],right_stride_session1_df$right_stride_Rwrist_z[[i]])
+  right_stride_session1_df$cor_Rwrist_zx[i] <- cor(right_stride_session1_df$right_stride_Rwrist_z[[i]],right_stride_session1_df$right_stride_Rwrist_x[[i]])
+  
+}
+
+right_stride_session1_master_y <- data.frame(right_stride_session1_df[,22])
+right_stride_session1_master_x <- right_stride_session1_df[,23:100]
+
+saveRDS(right_stride_session1_master_y,"right_stride_session1_master_y.rds")
+saveRDS(right_stride_session1_master_x,"right_stride_session1_master_x.rds")
+saveRDS(right_stride_session1_df,"right_stride_session1_df.rds")
+```
+
+
